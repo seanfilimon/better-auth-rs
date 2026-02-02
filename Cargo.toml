@@ -1,0 +1,87 @@
+[workspace]
+resolver = "2"
+members = [
+    # Core foundation
+    "crates/core/core",
+    "crates/core/macros",
+    "crates/core/main",
+    
+    # Storage adapters
+    "crates/adapters/memory",
+    
+    # Event system
+    "crates/events/events",
+    "crates/events/events-sdk",
+    
+    # Webhook system
+    "crates/webhooks/webhooks",
+    "crates/webhooks/webhooks-sdk",
+    
+    # Infrastructure
+    "crates/infra/server",
+    "crates/infra/admin",
+    "crates/infra/docs",
+    
+    # Plugins
+    "crates/plugins/oauth",
+    "crates/plugins/two-factor",
+    "crates/plugins/jwt",
+    "crates/plugins/password",
+    "crates/plugins/email-otp",
+    "crates/plugins/magic-link",
+    "crates/plugins/phone-number",
+    "crates/plugins/anonymous",
+    "crates/plugins/passkey",
+    "crates/plugins/api-key",
+    "crates/plugins/access",
+    "crates/plugins/otp-utils",
+    
+    # Framework integrations (special plugins)
+    "crates/plugins/integrations/integrations/axum",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/better-auth/better-auth-rs"
+authors = ["Better Auth Contributors"]
+
+[workspace.dependencies]
+# Shared dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Macro dependencies
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# Runtime dependencies
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# JWT
+jsonwebtoken = "9.3"
+
+# Internal crates - Core
+better_auth_core = { path = "crates/core/core" }
+better_auth_macros = { path = "crates/core/macros" }
+
+# Internal crates - Event system
+better_auth_events = { path = "crates/events/events" }
+better_auth_events_sdk = { path = "crates/events/events-sdk" }
+
+# Internal crates - Webhook system
+better_auth_webhooks = { path = "crates/webhooks/webhooks" }
+better_auth_webhooks_sdk = { path = "crates/webhooks/webhooks-sdk" }
+
+# Internal crates - Plugins
+better_auth_otp_utils = { path = "crates/plugins/otp-utils" }
