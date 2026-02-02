@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: better-auth-postgres
+    environment:
+      POSTGRES_DB: better_auth
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth_user -d better_auth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auth-network
+
+  # Redis Cache (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: better-auth-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - auth-network
+
+  # Better Auth Server
+  auth-server:
+    build:
+      context: ../../../..
+      dockerfile: crates/infra/deploy/docker/Dockerfile
+    container_name: better-auth-server
+    environment:
+      RUST_LOG: ${LOG_LEVEL:-info}
+      AUTH_PORT: 8080
+      AUTH_HOST: 0.0.0.0
+      DATABASE_URL: postgresql://auth_user:${DB_PASSWORD:-changeme}@postgres:5432/better_auth
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
+      SESSION_DURATION: ${SESSION_DURATION:-86400}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - auth-network
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Admin Dashboard (Future)
+  # admin:
+  #   build:
+  #     context: ../../../..
+  #     dockerfile: crates/infra/admin/Dockerfile
+  #   container_name: better-auth-admin
+  #   environment:
+  #     AUTH_API_URL: http://auth-server:8080
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - auth-server
+  #   networks:
+  #     - auth-network
+
+networks:
+  auth-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

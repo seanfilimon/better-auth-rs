@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: better-auth-config
+  namespace: better-auth
+data:
+  AUTH_PORT: "8080"
+  AUTH_HOST: "0.0.0.0"
+  RUST_LOG: "info"
+  SESSION_DURATION: "86400"
+  # Database URL (non-sensitive parts)
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "better_auth"
+  # Redis URL
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"

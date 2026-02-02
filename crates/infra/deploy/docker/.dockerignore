@@ -1,0 +1,57 @@
+# Build artifacts
+target/
+**/target/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Cursor
+.cursor/
+
+# Documentation
+*.md
+docs/
+*.pdf
+
+# Tests
+tests/
+**/tests/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Environment
+.env
+.env.*
+*.local
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Dependencies (will be downloaded during build)
+# Keep Cargo.lock for reproducible builds

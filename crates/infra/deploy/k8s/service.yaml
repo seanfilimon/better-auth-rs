@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: better-auth-service
+  namespace: better-auth
+  labels:
+    app: better-auth
+    component: server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: better-auth
+    component: server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: better-auth
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: better-auth
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    name: redis
+  selector:
+    app: redis
