@@ -1,0 +1,17 @@
+[package]
+name = "better_auth_core"
+description = "Core types and traits for Better Auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+better_auth_events = { path = "../../events/events" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
