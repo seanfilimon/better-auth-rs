@@ -1,0 +1,13 @@
+[package]
+name = "better_auth_adapter_memory"
+description = "In-memory storage adapter for Better Auth (testing)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+better_auth_core.workspace = true
+better_auth_plugin_access = { path = "../../plugins/access" }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+chrono.workspace = true
