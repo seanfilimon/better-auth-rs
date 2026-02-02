@@ -1,0 +1,19 @@
+[package]
+name = "better_auth_webhooks_sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SDK for integrating plugins with the Better Auth webhook system"
+
+[dependencies]
+better_auth_webhooks = { path = "../webhooks" }
+better_auth_events = { path = "../../events/events" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
