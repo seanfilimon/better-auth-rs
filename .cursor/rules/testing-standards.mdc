@@ -1,0 +1,107 @@
+---
+description: Testing standards for Better Auth codebase
+globs: **/*test*.rs
+alwaysApply: false
+---
+
+# Testing Standards
+
+## Test Organization
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_function() {
+        let result = sync_function();
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_async_function() {
+        let result = async_function().await;
+        assert!(result.is_ok());
+    }
+}
+```
+
+## Test Naming
+
+Use descriptive test names:
+
+```rust
+// ✅ GOOD
+#[test]
+fn test_config_builder_sets_callback_url() { }
+
+#[test]
+fn test_oauth_state_expires_after_10_minutes() { }
+
+// ❌ BAD
+#[test]
+fn test1() { }
+
+#[test]
+fn test_oauth() { }
+```
+
+## Assertions
+
+Use specific assertions:
+
+```rust
+// ✅ GOOD
+assert_eq!(user.email, "test@example.com");
+assert!(session.is_expired());
+assert_matches!(error, AuthError::UserNotFound);
+
+// ❌ BAD
+assert!(user.email == "test@example.com");
+assert_eq!(session.is_expired(), true);
+```
+
+## Test Fixtures
+
+Create reusable test helpers:
+
+```rust
+fn create_test_context() -> AuthContext {
+    AuthContext::builder()
+        .adapter(MemoryAdapter::new())
+        .build()
+}
+
+fn create_test_user() -> User {
+    User {
+        id: "test_id".into(),
+        email: "test@example.com".into(),
+        // ...
+    }
+}
+```
+
+## Integration Tests
+
+Place in `tests/` directory:
+
+```rust
+// tests/oauth_integration.rs
+use better_auth::*;
+
+#[tokio::test]
+async fn test_complete_oauth_flow() {
+    // Setup
+    let ctx = create_test_context();
+    
+    // Test authorization
+    let auth_url = generate_auth_url(&ctx, "google").await.unwrap();
+    
+    // Test callback
+    let session = handle_callback(&ctx, code, state).await.unwrap();
+    
+    // Verify
+    assert_eq!(session.user_id, expected_user_id);
+}
+```

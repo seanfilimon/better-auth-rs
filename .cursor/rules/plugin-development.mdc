@@ -1,0 +1,933 @@
+---
+description: Comprehensive guidelines for developing Better Auth plugins
+globs: crates/plugins/**/*.rs
+alwaysApply: false
+---
+
+# Plugin Development Guide
+
+This comprehensive guide covers all aspects of developing plugins for Better Auth.
+
+## Plugin Architecture Overview
+
+Plugins are the primary extension mechanism in Better Auth. They can:
+- Add custom database fields and tables
+- Register HTTP routes and handlers
+- Hook into authentication lifecycle events
+- Emit and listen to events
+- Provide extensions accessible from `AuthContext`
+- Define webhooks for external integrations
+
+## Core Plugin Trait
+
+Every plugin MUST implement the `AuthPlugin` trait:
+
+```rust
+use async_trait::async_trait;
+use better_auth_core::traits::AuthPlugin;
+use better_auth_core::router::Router;
+use better_auth_core::schema::SchemaBuilder;
+use better_auth_core::context::AuthContext;
+use better_auth_core::types::Session;
+use better_auth_core::error::AuthResult;
+
+#[async_trait]
+impl AuthPlugin for MyPlugin {
+    /// Unique identifier for the plugin (kebab-case)
+    fn id(&self) -> &'static str { "my-plugin" }
+    
+    /// Human-readable name
+    fn name(&self) -> &'static str { "My Plugin" }
+    
+    /// Extend database schema with custom fields/tables
+    fn define_schema(&self, builder: &mut SchemaBuilder) {
+        // Add fields to existing models
+        builder.extend_model("user", vec![
+            Field::new("my_custom_field", FieldType::String)
+                .nullable()
+        ]);
+        
+        // Or create entirely new tables
+        builder.add_model(ModelDefinition {
+            name: "my_table".to_string(),
+            fields: vec![
+                Field::new("id", FieldType::String).primary_key(),
+                Field::new("user_id", FieldType::String)
+                    .foreign_key("user", "id", ReferentialAction::Cascade),
+                Field::new("data", FieldType::Json),
+            ],
+            indexes: vec![
+                IndexDefinition::new("idx_my_table_user_id", vec!["user_id"])
+            ],
+        });
+    }
+    
+    /// Register HTTP routes
+    fn register_routes(&self, router: &mut Router) {
+        use better_auth_core::router::{Route, Method};
+        use std::sync::Arc;
+        
+        router.route(Route {
+            path: "/my-endpoint".to_string(),
+            method: Method::POST,
+            handler: Arc::new(|req, ctx| Box::pin(async move {
+                // Handle request
+                let response = Response::json(json!({"status": "ok"}));
+                Ok(response)
+            })),
+        });
+    }
+    
+    /// Hook called after successful sign-in
+    async fn on_after_signin(
+        &self,
+        ctx: &AuthContext,
+        session: &mut Session,
+    ) -> AuthResult<()> {
+        // Perform actions after user signs in
+        // Can modify session, emit events, etc.
+        Ok(())
+    }
+    
+    /// Hook called after successful sign-up
+    async fn on_after_signup(
+        &self,
+        ctx: &AuthContext,
+        user: &User,
+    ) -> AuthResult<()> {
+        // Initialize plugin-specific data for new user
+        Ok(())
+    }
+    
+    /// Hook called before session is validated
+    async fn on_before_session_validate(
+        &self,
+        ctx: &AuthContext,
+        token: &str,
+    ) -> AuthResult<()> {
+        // Can reject session validation
+        Ok(())
+    }
+}
+```
+
+## Plugin Configuration
+
+### Builder Pattern
+
+Always use the builder pattern for configuration:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct MyPluginConfig {
+    pub enabled: bool,
+    pub timeout: Duration,
+    pub api_key: Option<String>,
+    pub rate_limit: RateLimit,
+    pub custom_validators: Vec<String>,
+}
+
+impl Default for MyPluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout: Duration::from_secs(30),
+            api_key: None,
+            rate_limit: RateLimit::default(),
+            custom_validators: Vec::new(),
+        }
+    }
+}
+
+impl MyPluginConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    pub fn enabled(mut self, value: bool) -> Self {
+        self.enabled = value;
+        self
+    }
+    
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.timeout = duration;
+        self
+    }
+    
+    pub fn api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+    
+    pub fn rate_limit(mut self, limit: RateLimit) -> Self {
+        self.rate_limit = limit;
+        self
+    }
+    
+    pub fn add_validator(mut self, validator: impl Into<String>) -> Self {
+        self.custom_validators.push(validator.into());
+        self
+    }
+}
+
+// Plugin struct holds Arc to config for cheap cloning
+pub struct MyPlugin {
+    config: Arc<MyPluginConfig>,
+}
+
+impl MyPlugin {
+    pub fn new(config: MyPluginConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+        }
+    }
+    
+    pub fn default_config() -> Self {
+        Self::new(MyPluginConfig::default())
+    }
+}
+```
+
+### Configuration Validation
+
+Validate configuration in constructor:
+
+```rust
+impl MyPlugin {
+    pub fn new(config: MyPluginConfig) -> Result<Self, ConfigError> {
+        // Validate configuration
+        if config.timeout.as_secs() == 0 {
+            return Err(ConfigError::InvalidValue("timeout must be > 0".into()));
+        }
+        
+        if config.enabled && config.api_key.is_none() {
+            return Err(ConfigError::MissingRequired("api_key".into()));
+        }
+        
+        Ok(Self {
+            config: Arc::new(config),
+        })
+    }
+}
+```
+
+## Event Integration
+
+### Defining Events
+
+Implement `EventProvider` to declare events your plugin emits:
+
+```rust
+use better_auth_events_sdk::{EventProvider, EventDefinition};
+
+impl EventProvider for MyPlugin {
+    fn provided_events() -> Vec<EventDefinition> {
+        vec![
+            EventDefinition::simple(
+                "my_plugin.action_started",
+                "Emitted when plugin action starts",
+                "my_plugin"
+            ),
+            EventDefinition::simple(
+                "my_plugin.action_completed",
+                "Emitted when plugin action completes successfully",
+                "my_plugin"
+            ),
+            EventDefinition::simple(
+                "my_plugin.action_failed",
+                "Emitted when plugin action fails",
+                "my_plugin"
+            ),
+            // Event with metadata
+            EventDefinition {
+                event_type: "my_plugin.validation_required".to_string(),
+                description: "Emitted when validation is required".to_string(),
+                source: "my_plugin".to_string(),
+                metadata_schema: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "value": {"type": "string"}
+                    }
+                })),
+            },
+        ]
+    }
+    
+    fn event_source() -> &'static str {
+        "my_plugin"
+    }
+}
+```
+
+### Emitting Events
+
+Emit events from your plugin handlers:
+
+```rust
+async fn my_handler(
+    req: Request,
+    ctx: Arc<AuthContext>,
+) -> AuthResult<Response> {
+    // Emit event before action
+    ctx.events().emit(
+        Event::new("my_plugin.action_started")
+            .with_data(json!({"user_id": user_id}))
+    ).await?;
+    
+    // Perform action
+    match perform_action().await {
+        Ok(result) => {
+            // Emit success event
+            ctx.events().emit(
+                Event::new("my_plugin.action_completed")
+                    .with_data(json!({"result": result}))
+            ).await?;
+            
+            Ok(Response::json(result))
+        }
+        Err(e) => {
+            // Emit failure event
+            ctx.events().emit(
+                Event::new("my_plugin.action_failed")
+                    .with_data(json!({"error": e.to_string()}))
+            ).await?;
+            
+            Err(e)
+        }
+    }
+}
+```
+
+### Listening to Events
+
+Subscribe to events from other plugins:
+
+```rust
+#[async_trait]
+impl AuthPlugin for MyPlugin {
+    async fn on_initialize(&self, ctx: &AuthContext) -> AuthResult<()> {
+        let config = self.config.clone();
+        
+        // Listen to user creation events
+        ctx.events().on("user.created", move |event| {
+            let config = config.clone();
+            Box::pin(async move {
+                if let Some(user_id) = event.data.get("user_id") {
+                    // Initialize plugin data for new user
+                    initialize_user_data(user_id, &config).await?;
+                }
+                Ok(())
+            })
+        });
+        
+        // Listen to signin events
+        ctx.events().on("user.signed_in", |event| {
+            Box::pin(async move {
+                // Track signin
+                track_signin(event).await?;
+                Ok(())
+            })
+        });
+        
+        Ok(())
+    }
+}
+```
+
+## Schema Management
+
+### Extending Existing Models
+
+Add fields to core models (user, session, account):
+
+```rust
+fn define_schema(&self, builder: &mut SchemaBuilder) {
+    builder.extend_model("user", vec![
+        // Boolean field with default
+        Field::new("two_factor_enabled", FieldType::Boolean)
+            .default_value("false")
+            .not_null(),
+        
+        // Nullable string field
+        Field::new("two_factor_secret", FieldType::String)
+            .nullable(),
+        
+        // Timestamp field
+        Field::new("two_factor_enabled_at", FieldType::Timestamp)
+            .nullable(),
+        
+        // Integer field with constraints
+        Field::new("backup_codes_remaining", FieldType::Integer)
+            .default_value("0")
+            .not_null(),
+        
+        // JSON field for complex data
+        Field::new("plugin_metadata", FieldType::Json)
+            .nullable(),
+    ]);
+}
+```
+
+### Creating New Tables
+
+Create plugin-specific tables:
+
+```rust
+fn define_schema(&self, builder: &mut SchemaBuilder) {
+    builder.add_model(ModelDefinition {
+        name: "oauth_accounts".to_string(),
+        fields: vec![
+            Field::new("id", FieldType::String)
+                .primary_key(),
+            
+            Field::new("user_id", FieldType::String)
+                .not_null()
+                .foreign_key("user", "id", ReferentialAction::Cascade),
+            
+            Field::new("provider", FieldType::String)
+                .not_null(),
+            
+            Field::new("provider_account_id", FieldType::String)
+                .not_null(),
+            
+            Field::new("access_token", FieldType::Text)
+                .nullable(),
+            
+            Field::new("refresh_token", FieldType::Text)
+                .nullable(),
+            
+            Field::new("expires_at", FieldType::Timestamp)
+                .nullable(),
+            
+            Field::new("created_at", FieldType::Timestamp)
+                .default_value("CURRENT_TIMESTAMP")
+                .not_null(),
+        ],
+        indexes: vec![
+            // Index on foreign key
+            IndexDefinition::new("idx_oauth_user_id", vec!["user_id"]),
+            
+            // Unique constraint on provider + account
+            IndexDefinition::new("idx_oauth_unique_account", vec!["provider", "provider_account_id"])
+                .unique(),
+        ],
+    });
+}
+```
+
+### Field Types Reference
+
+```rust
+// String types
+FieldType::String       // VARCHAR(255)
+FieldType::Text         // TEXT (unlimited)
+
+// Numeric types
+FieldType::Integer      // INTEGER/INT
+FieldType::BigInt       // BIGINT
+FieldType::Decimal      // DECIMAL
+
+// Boolean
+FieldType::Boolean      // BOOLEAN
+
+// Date/Time
+FieldType::Timestamp    // TIMESTAMP
+FieldType::Date         // DATE
+FieldType::Time         // TIME
+
+// Binary/JSON
+FieldType::Bytes        // BYTEA/BLOB
+FieldType::Json         // JSON/JSONB
+```
+
+### Field Constraints
+
+```rust
+Field::new("email", FieldType::String)
+    .not_null()              // NOT NULL
+    .unique()                // UNIQUE
+    .indexed()               // CREATE INDEX
+    .default_value("value")  // DEFAULT 'value'
+    .primary_key()           // PRIMARY KEY
+    .foreign_key(           // FOREIGN KEY
+        "user",              // Referenced table
+        "id",                // Referenced column
+        ReferentialAction::Cascade  // ON DELETE CASCADE
+    )
+```
+
+## HTTP Route Handlers
+
+### Handler Signature
+
+```rust
+use better_auth_core::router::{Request, Response, HandlerFuture};
+use std::sync::Arc;
+
+type Handler = Arc<
+    dyn Fn(Request, Arc<AuthContext>) -> HandlerFuture + Send + Sync
+>;
+
+type HandlerFuture = Pin<Box<
+    dyn Future<Output = AuthResult<Response>> + Send
+>>;
+```
+
+### Basic Handler
+
+```rust
+fn register_routes(&self, router: &mut Router) {
+    let config = self.config.clone();
+    
+    router.route(Route {
+        path: "/my-endpoint".to_string(),
+        method: Method::POST,
+        handler: Arc::new(move |req, ctx| {
+            let config = config.clone();
+            Box::pin(async move {
+                // Extract request data
+                let body: MyRequest = req.json()?;
+                
+                // Validate
+                validate_request(&body, &config)?;
+                
+                // Process
+                let result = process_request(body, &ctx, &config).await?;
+                
+                // Return response
+                Ok(Response::json(result))
+            })
+        }),
+    });
+}
+```
+
+### Handler with Authentication
+
+```rust
+router.route(Route {
+    path: "/protected".to_string(),
+    method: Method::GET,
+    handler: Arc::new(|req, ctx| Box::pin(async move {
+        // Extract session from request
+        let session = ctx.get_session_from_request(&req).await?
+            .ok_or(AuthError::Unauthorized)?;
+        
+        // Verify user exists
+        let user = ctx.adapter().get_user_by_id(&session.user_id).await?
+            .ok_or(AuthError::UserNotFound)?;
+        
+        // Process authenticated request
+        let data = get_user_data(&user, &ctx).await?;
+        
+        Ok(Response::json(data))
+    })),
+});
+```
+
+### Handler with Validation
+
+```rust
+use serde::Deserialize;
+use validator::Validate;
+
+#[derive(Deserialize, Validate)]
+struct MyRequest {
+    #[validate(email)]
+    email: String,
+    
+    #[validate(length(min = 8))]
+    password: String,
+}
+
+router.route(Route {
+    path: "/validate".to_string(),
+    method: Method::POST,
+    handler: Arc::new(|req, ctx| Box::pin(async move {
+        // Parse and validate
+        let body: MyRequest = req.json()?;
+        body.validate()
+            .map_err(|e| AuthError::ValidationError(e.to_string()))?;
+        
+        // Process valid request
+        process_validated_request(body, &ctx).await?;
+        
+        Ok(Response::json(json!({"success": true})))
+    })),
+});
+```
+
+### Error Handling in Handlers
+
+```rust
+handler: Arc::new(|req, ctx| Box::pin(async move {
+    match process_request(&req, &ctx).await {
+        Ok(result) => Ok(Response::json(result)),
+        
+        Err(AuthError::ValidationError(msg)) => {
+            Ok(Response::json(json!({"error": msg}))
+                .with_status(400))
+        }
+        
+        Err(AuthError::Unauthorized) => {
+            Ok(Response::json(json!({"error": "Unauthorized"}))
+                .with_status(401))
+        }
+        
+        Err(AuthError::RateLimitExceeded) => {
+            Ok(Response::json(json!({"error": "Rate limit exceeded"}))
+                .with_status(429)
+                .with_header("Retry-After", "60"))
+        }
+        
+        Err(e) => {
+            tracing::error!("Handler error: {}", e);
+            Ok(Response::json(json!({"error": "Internal server error"}))
+                .with_status(500))
+        }
+    }
+}))
+```
+
+## Extension Provider Pattern
+
+Provide plugin-specific functionality accessible from `AuthContext`:
+
+```rust
+use better_auth_core::traits::ExtensionProvider;
+
+pub struct MyPluginExtension {
+    config: Arc<MyPluginConfig>,
+    adapter: Arc<dyn StorageAdapter>,
+}
+
+impl MyPluginExtension {
+    pub async fn my_custom_method(&self, param: String) -> AuthResult<String> {
+        // Plugin-specific logic accessible from context
+        Ok(format!("Processed: {}", param))
+    }
+    
+    pub async fn get_plugin_data(&self, user_id: &str) -> AuthResult<PluginData> {
+        // Fetch plugin-specific data
+        self.adapter.get_plugin_data(user_id).await
+    }
+}
+
+impl ExtensionProvider for MyPlugin {
+    type Extension = MyPluginExtension;
+    
+    fn provide_extension(&self) -> Self::Extension {
+        MyPluginExtension {
+            config: self.config.clone(),
+            adapter: self.adapter.clone(),
+        }
+    }
+}
+
+// Usage in other plugins or handlers:
+// let ext = ctx.extension::<MyPluginExtension>()?;
+// let result = ext.my_custom_method("data").await?;
+```
+
+## Rate Limiting
+
+Implement rate limiting for plugin endpoints:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+pub struct RateLimiter {
+    limits: Mutex<HashMap<String, Vec<Instant>>>,
+    max_requests: usize,
+    window: Duration,
+}
+
+impl RateLimiter {
+    pub fn new(max_requests: usize, window: Duration) -> Self {
+        Self {
+            limits: Mutex::new(HashMap::new()),
+            max_requests,
+            window,
+        }
+    }
+    
+    pub fn check_rate_limit(&self, key: &str) -> Result<(), AuthError> {
+        let mut limits = self.limits.lock().unwrap();
+        let now = Instant::now();
+        
+        let requests = limits.entry(key.to_string()).or_insert_with(Vec::new);
+        
+        // Remove old requests outside window
+        requests.retain(|&time| now.duration_since(time) < self.window);
+        
+        if requests.len() >= self.max_requests {
+            return Err(AuthError::RateLimitExceeded);
+        }
+        
+        requests.push(now);
+        Ok(())
+    }
+}
+
+// Use in handler:
+router.route(Route {
+    path: "/rate-limited".to_string(),
+    method: Method::POST,
+    handler: Arc::new(move |req, ctx| {
+        let limiter = self.rate_limiter.clone();
+        Box::pin(async move {
+            // Check rate limit by IP or user ID
+            let key = req.headers().get("X-Forwarded-For")
+                .or_else(|| req.headers().get("Remote-Addr"))
+                .unwrap_or("unknown");
+            
+            limiter.check_rate_limit(key)?;
+            
+            // Process request
+            Ok(Response::json(json!({"success": true})))
+        })
+    }),
+});
+```
+
+## Testing Plugins
+
+### Unit Tests
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_plugin_config() {
+        let config = MyPluginConfig::new()
+            .timeout(Duration::from_secs(60))
+            .api_key("test_key");
+        
+        assert_eq!(config.timeout.as_secs(), 60);
+        assert_eq!(config.api_key, Some("test_key".to_string()));
+    }
+    
+    #[test]
+    fn test_plugin_id() {
+        let plugin = MyPlugin::default_config();
+        assert_eq!(plugin.id(), "my-plugin");
+    }
+    
+    #[tokio::test]
+    async fn test_schema_extension() {
+        let plugin = MyPlugin::default_config();
+        let mut builder = SchemaBuilder::new();
+        
+        plugin.define_schema(&mut builder);
+        
+        let schema = builder.build();
+        let user_model = schema.get_model("user").unwrap();
+        
+        assert!(user_model.fields.iter()
+            .any(|f| f.name == "my_custom_field"));
+    }
+}
+```
+
+### Integration Tests
+
+```rust
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use better_auth_adapters_memory::MemoryAdapter;
+    
+    async fn create_test_context() -> AuthContext {
+        let adapter = MemoryAdapter::new();
+        let plugin = MyPlugin::default_config();
+        
+        AuthContext::builder()
+            .adapter(adapter)
+            .plugin(plugin)
+            .build()
+    }
+    
+    #[tokio::test]
+    async fn test_plugin_lifecycle() {
+        let ctx = create_test_context().await;
+        
+        // Test signup with plugin
+        let user = ctx.sign_up(SignUpData {
+            email: "test@example.com".into(),
+            password: "password123".into(),
+        }).await.unwrap();
+        
+        // Verify plugin initialized user data
+        let plugin_data = get_plugin_data(&ctx, &user.id).await.unwrap();
+        assert!(plugin_data.is_initialized);
+    }
+    
+    #[tokio::test]
+    async fn test_plugin_routes() {
+        let ctx = create_test_context().await;
+        
+        // Create test request
+        let req = Request::post("/my-endpoint")
+            .json(json!({"data": "test"}));
+        
+        // Execute handler
+        let response = ctx.handle_request(req).await.unwrap();
+        
+        assert_eq!(response.status(), 200);
+    }
+}
+```
+
+## Common Plugin Patterns
+
+### State Management
+
+```rust
+pub struct MyPlugin {
+    config: Arc<MyPluginConfig>,
+    state: Arc<RwLock<PluginState>>,
+}
+
+struct PluginState {
+    cache: HashMap<String, CachedData>,
+    connections: Vec<Connection>,
+}
+
+impl MyPlugin {
+    pub async fn get_cached(&self, key: &str) -> Option<CachedData> {
+        let state = self.state.read().await;
+        state.cache.get(key).cloned()
+    }
+    
+    pub async fn set_cached(&self, key: String, data: CachedData) {
+        let mut state = self.state.write().await;
+        state.cache.insert(key, data);
+    }
+}
+```
+
+### Background Tasks
+
+```rust
+impl MyPlugin {
+    pub fn spawn_background_tasks(&self, ctx: Arc<AuthContext>) {
+        let config = self.config.clone();
+        
+        tokio::spawn(async move {
+            loop {
+                // Perform periodic task
+                if let Err(e) = perform_cleanup(&config).await {
+                    tracing::error!("Cleanup failed: {}", e);
+                }
+                
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+        });
+    }
+}
+```
+
+### Middleware Pattern
+
+```rust
+pub struct PluginMiddleware {
+    config: Arc<MyPluginConfig>,
+}
+
+impl PluginMiddleware {
+    pub async fn before_request(
+        &self,
+        req: &mut Request,
+        ctx: &AuthContext,
+    ) -> AuthResult<()> {
+        // Modify request or perform checks
+        if !self.config.enabled {
+            return Err(AuthError::PluginDisabled);
+        }
+        Ok(())
+    }
+    
+    pub async fn after_response(
+        &self,
+        res: &mut Response,
+        ctx: &AuthContext,
+    ) -> AuthResult<()> {
+        // Modify response or log
+        res.headers_mut().insert("X-Plugin", "my-plugin");
+        Ok(())
+    }
+}
+```
+
+## Plugin Documentation
+
+### Module-Level Documentation
+
+```rust
+//! # My Auth Plugin
+//!
+//! This plugin provides [functionality description].
+//!
+//! ## Features
+//!
+//! - Feature 1
+//! - Feature 2
+//! - Feature 3
+//!
+//! ## Installation
+//!
+//! Add to your `Cargo.toml`:
+//!
+//! ```toml
+//! better-auth-plugin-my-plugin = "0.1"
+//! ```
+//!
+//! ## Configuration
+//!
+//! ```rust,ignore
+//! use better_auth_plugin_my_plugin::{MyPlugin, MyPluginConfig};
+//!
+//! let plugin = MyPlugin::new(
+//!     MyPluginConfig::new()
+//!         .option_a("value")
+//!         .option_b(true)
+//! );
+//! ```
+//!
+//! ## Events
+//!
+//! This plugin emits the following events:
+//!
+//! - `my_plugin.action_started` - When action starts
+//! - `my_plugin.action_completed` - When action completes
+//!
+//! ## Examples
+//!
+//! See the `examples/` directory for complete examples.
+```
+
+## Security Considerations
+
+- Never log sensitive data (passwords, tokens, secrets)
+- Always validate and sanitize user input
+- Use parameterized queries for database operations
+- Implement rate limiting for public endpoints
+- Verify authentication for protected routes
+- Use secure random number generation for tokens
+- Set appropriate CORS headers
+- Implement CSRF protection for state-changing operations
+
+## Performance Tips
+
+- Use `Arc` for shared configuration
+- Cache frequently accessed data
+- Batch database operations when possible
+- Use connection pooling
+- Implement pagination for large result sets
+- Use indexes for frequently queried fields
+- Avoid N+1 query patterns

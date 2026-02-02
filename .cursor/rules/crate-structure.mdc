@@ -1,0 +1,797 @@
+---
+description: Comprehensive crate organization and modular architecture guidelines for scaling
+alwaysApply: true
+---
+
+# Crate Structure & Architecture
+
+This guide defines the organizational principles for scaling Better Auth to handle large, complex codebases while maintaining modularity, testability, and clear boundaries.
+
+## Architectural Layers
+
+Better Auth follows a layered architecture with strict dependency rules:
+
+```
+┌─────────────────────────────────────────┐
+│         Applications/Binaries           │  (server, CLI tools)
+├─────────────────────────────────────────┤
+│      Integrations (Framework)           │  (Axum, Actix, etc.)
+├─────────────────────────────────────────┤
+│       Plugins (Features)                │  (OAuth, 2FA, etc.)
+├─────────────────────────────────────────┤
+│         SDK Layers                      │  (events-sdk, webhooks-sdk)
+├─────────────────────────────────────────┤
+│     Core Systems (events, webhooks)     │  (implementation)
+├─────────────────────────────────────────┤
+│      Core (Types & Traits)              │  (foundational)
+├─────────────────────────────────────────┤
+│         Storage Adapters                │  (database abstraction)
+└─────────────────────────────────────────┘
+```
+
+### Layer Dependencies
+
+- **Top layers depend on bottom layers, never the reverse**
+- **Sibling layers (plugins, adapters) NEVER depend on each other**
+- **Use traits and dynamic dispatch for cross-layer communication**
+
+## Core Crate Structure
+
+### 1. Core (`crates/core/`)
+
+The foundational crate containing types, traits, and schema system.
+
+**Allowed Dependencies:**
+- `serde`, `async-trait`, `chrono`, `uuid`, `thiserror`
+- No framework-specific dependencies
+- No database client libraries
+
+**File Structure:**
+```
+crates/core/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs           # Public API, re-exports
+│   ├── types.rs         # Core data types (User, Session, Account)
+│   ├── error.rs         # Error types and AuthResult
+│   ├── traits.rs        # Plugin, adapter, extension traits
+│   ├── context/
+│   │   ├── mod.rs       # AuthContext definition
+│   │   ├── builder.rs   # Context builder pattern
+│   │   └── session.rs   # Session management
+│   ├── router/
+│   │   ├── mod.rs       # Router trait and types
+│   │   ├── request.rs   # Request abstraction
+│   │   ├── response.rs  # Response abstraction
+│   │   └── route.rs     # Route definition
+│   └── schema/
+│       ├── mod.rs       # Schema system entry
+│       ├── builder.rs   # Schema builder
+│       ├── definition.rs# Model and field definitions
+│       ├── migration.rs # Migration generation
+│       └── diff.rs      # Schema diff calculation
+└── tests/
+    └── integration/     # Integration tests
+```
+
+**Key Principles:**
+```rust
+// ✅ GOOD - Core provides traits
+pub trait StorageAdapter: Send + Sync {
+    async fn get_user(&self, id: &str) -> AuthResult<Option<User>>;
+}
+
+// ✅ GOOD - Core provides types
+pub struct User {
+    pub id: String,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
+}
+
+// ❌ BAD - Core should NOT have implementations
+impl StorageAdapter for PostgresAdapter { } // Wrong crate!
+
+// ❌ BAD - Core should NOT depend on plugins
+use better_auth_plugin_oauth::OAuthPlugin; // Circular dependency!
+```
+
+### 2. Events System (`crates/events/`)
+
+Event bus implementation for reactive programming.
+
+**Allowed Dependencies:**
+- `core` crate
+- `tokio`, `async-trait`
+- No plugin dependencies
+
+**File Structure:**
+```
+crates/events/
+├── src/
+│   ├── lib.rs          # Public API
+│   ├── bus.rs          # EventBus implementation
+│   ├── event.rs        # Event struct
+│   ├── handler.rs      # Handler trait and types
+│   ├── middleware.rs   # Middleware support
+│   ├── registry.rs     # Event registry
+│   ├── emitter.rs      # Event emission logic
+│   └── error.rs        # Event-specific errors
+```
+
+**Design Pattern:**
+```rust
+// Core defines event trait in events crate
+pub trait EventHandler: Send + Sync {
+    async fn handle(&self, event: &Event) -> Result<(), EventError>;
+}
+
+// Plugins use event system without depending on each other
+ctx.events().emit(Event::new("user.created")).await?;
+```
+
+### 3. Events SDK (`crates/events-sdk/`)
+
+SDK for plugins to define events declaratively.
+
+**Purpose:** Separate the SDK (used by plugins) from implementation (events crate).
+
+**File Structure:**
+```
+crates/events-sdk/
+├── src/
+│   ├── lib.rs          # SDK API
+│   ├── traits.rs       # EventProvider trait
+│   ├── definition.rs   # EventDefinition struct
+│   └── builder.rs      # Builder for complex events
+```
+
+**Usage Pattern:**
+```rust
+// Plugins depend on events-sdk, not events
+use better_auth_events_sdk::EventProvider;
+
+impl EventProvider for MyPlugin {
+    fn provided_events() -> Vec<EventDefinition> {
+        vec![EventDefinition::simple("my_plugin.action", "desc", "source")]
+    }
+}
+```
+
+### 4. Webhooks System (`crates/webhooks/`)
+
+Webhook delivery system with retry logic.
+
+**File Structure:**
+```
+crates/webhooks/
+├── src/
+│   ├── lib.rs          # Public API
+│   ├── system.rs       # WebhookSystem orchestrator
+│   ├── endpoint.rs     # Endpoint management
+│   ├── delivery.rs     # Delivery logic
+│   ├── queue.rs        # Queue implementation
+│   ├── retry.rs        # Retry strategies
+│   ├── signature.rs    # HMAC signature generation
+│   ├── storage.rs      # Webhook storage trait
+│   ├── receiver.rs     # Webhook reception/verification
+│   └── error.rs        # Webhook errors
+```
+
+### 5. Webhooks SDK (`crates/webhooks-sdk/`)
+
+SDK for external services to integrate webhooks.
+
+**File Structure:**
+```
+crates/webhooks-sdk/
+├── src/
+│   ├── lib.rs          # SDK API
+│   ├── client.rs       # HTTP client for webhooks
+│   ├── traits.rs       # Webhook consumer traits
+│   └── builder.rs      # Webhook config builder
+```
+
+### 6. Macros (`crates/macros/`)
+
+Procedural macros for code generation (future).
+
+**File Structure:**
+```
+crates/macros/
+├── Cargo.toml          # proc-macro = true
+├── src/
+│   ├── lib.rs          # Macro entry points
+│   ├── app_macro.rs    # #[better_auth::app]
+│   ├── model_macro.rs  # #[derive(AuthModel)]
+│   └── parsing/
+│       ├── mod.rs
+│       └── helpers.rs  # Syn/quote helpers
+```
+
+### 7. Main (`crates/main/`)
+
+Main entry point, re-exports everything.
+
+**File Structure:**
+```
+crates/main/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs          # Re-export all public APIs
+│   ├── prelude.rs      # Common imports
+│   └── builder.rs      # High-level builder (if needed)
+└── examples/
+    ├── basic_app.rs
+    ├── with_plugins.rs
+    └── custom_adapter.rs
+```
+
+**Pattern:**
+```rust
+// Main crate provides convenient imports
+pub use better_auth_core::*;
+pub use better_auth_events::*;
+pub use better_auth_webhooks::*;
+
+// Plugins are opt-in
+#[cfg(feature = "oauth")]
+pub use better_auth_plugin_oauth::*;
+
+#[cfg(feature = "two-factor")]
+pub use better_auth_plugin_two_factor::*;
+```
+
+## Plugin Organization
+
+### Plugin File Structure
+
+Each plugin is a standalone crate:
+
+```
+crates/plugins/my-plugin/
+├── Cargo.toml
+├── README.md           # Plugin documentation
+├── src/
+│   ├── lib.rs          # Plugin trait impl, re-exports
+│   ├── config.rs       # Configuration struct
+│   ├── handlers.rs     # HTTP route handlers
+│   ├── schema.rs       # Schema extensions
+│   ├── provider.rs     # Business logic (if applicable)
+│   ├── error.rs        # Plugin-specific errors
+│   └── types.rs        # Plugin-specific types
+├── tests/
+│   ├── integration.rs  # Integration tests
+│   └── fixtures/       # Test data
+└── examples/
+    └── usage.rs        # Usage examples
+```
+
+### Plugin lib.rs Structure
+
+```rust
+//! # My Auth Plugin
+//!
+//! [Comprehensive module documentation]
+
+// Internal modules
+mod config;
+mod handlers;
+mod schema;
+mod provider;
+mod error;
+mod types;
+
+// Public exports
+pub use config::{MyPluginConfig, RateLimitConfig};
+pub use error::MyPluginError;
+pub use types::{MyData, MyRequest, MyResponse};
+
+// External dependencies
+use async_trait::async_trait;
+use better_auth_core::{
+    traits::{AuthPlugin, ExtensionProvider},
+    context::AuthContext,
+    router::{Router, Route, Method},
+    schema::SchemaBuilder,
+    error::AuthResult,
+};
+use better_auth_events_sdk::EventProvider;
+use std::sync::Arc;
+
+/// Main plugin struct
+pub struct MyPlugin {
+    config: Arc<MyPluginConfig>,
+    // Internal state
+}
+
+impl MyPlugin {
+    pub fn new(config: MyPluginConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+        }
+    }
+}
+
+// Trait implementations
+#[async_trait]
+impl AuthPlugin for MyPlugin {
+    fn id(&self) -> &'static str { "my-plugin" }
+    fn name(&self) -> &'static str { "My Plugin" }
+    
+    fn define_schema(&self, builder: &mut SchemaBuilder) {
+        schema::define_schema(builder, &self.config);
+    }
+    
+    fn register_routes(&self, router: &mut Router) {
+        handlers::register_routes(router, self.config.clone());
+    }
+}
+
+impl EventProvider for MyPlugin {
+    fn provided_events() -> Vec<EventDefinition> {
+        schema::provided_events()
+    }
+    
+    fn event_source() -> &'static str { "my_plugin" }
+}
+
+impl ExtensionProvider for MyPlugin {
+    type Extension = MyPluginExtension;
+    
+    fn provide_extension(&self) -> Self::Extension {
+        MyPluginExtension {
+            config: self.config.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Plugin unit tests
+}
+```
+
+### Complex Plugin Structure
+
+For larger plugins, use submodules:
+
+```
+crates/plugins/oauth/
+├── src/
+│   ├── lib.rs
+│   ├── config.rs
+│   ├── error.rs
+│   ├── provider/           # Provider implementations
+│   │   ├── mod.rs
+│   │   ├── google.rs
+│   │   ├── github.rs
+│   │   ├── discord.rs
+│   │   └── generic.rs
+│   ├── routes/             # Route handlers
+│   │   ├── mod.rs
+│   │   ├── authorize.rs
+│   │   ├── callback.rs
+│   │   └── link.rs
+│   └── state.rs            # State management
+```
+
+## Adapter Organization
+
+### Adapter Structure
+
+```
+crates/adapters/
+├── memory/                 # In-memory adapter (testing)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       └── storage.rs
+├── sqlx/                   # SQLx adapter (production)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       ├── postgres.rs
+│       ├── mysql.rs
+│       ├── sqlite.rs
+│       └── queries.rs
+└── sea-orm/                # SeaORM adapter (alternative)
+    ├── Cargo.toml
+    └── src/
+        ├── lib.rs
+        └── adapter.rs
+```
+
+### Adapter Implementation Pattern
+
+```rust
+// Each adapter implements the core trait
+use async_trait::async_trait;
+use better_auth_core::traits::StorageAdapter;
+
+pub struct SqlxAdapter {
+    pool: sqlx::PgPool,
+}
+
+#[async_trait]
+impl StorageAdapter for SqlxAdapter {
+    async fn create_user(&self, data: CreateUserData) -> AuthResult<User> {
+        // Implementation
+    }
+    
+    // ... other methods
+}
+```
+
+## Integration Organization
+
+### Integration Structure
+
+```
+crates/integrations/
+├── axum/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs          # Public API
+│       ├── layer.rs        # Tower layer
+│       ├── extractor.rs    # Request extractors
+│       ├── routes.rs       # Route mounting
+│       └── error.rs        # Error conversion
+├── actix/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       ├── middleware.rs
+│       └── extractor.rs
+└── warp/
+    └── ...
+```
+
+### Integration Pattern
+
+```rust
+// Integration adapts framework to core abstractions
+use axum::{extract::State, http::Request};
+use better_auth_core::context::AuthContext;
+
+pub struct AuthLayer {
+    ctx: Arc<AuthContext>,
+}
+
+impl AuthLayer {
+    pub fn new(ctx: Arc<AuthContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+// Convert framework types to core types
+impl From<axum::http::Request> for better_auth_core::router::Request {
+    fn from(req: axum::http::Request) -> Self {
+        // Conversion logic
+    }
+}
+```
+
+## Dependency Management
+
+### Workspace Cargo.toml
+
+```toml
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/macros",
+    "crates/main",
+    "crates/events",
+    "crates/events-sdk",
+    "crates/webhooks",
+    "crates/webhooks-sdk",
+    "crates/adapters/*",
+    "crates/plugins/*",
+    "crates/integrations/*",
+    "crates/server",
+    "crates/admin",
+    "crates/docs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Better Auth Contributors"]
+
+[workspace.dependencies]
+# Shared dependencies with consistent versions
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tracing = "0.1"
+
+# Internal crates - use path dependencies
+better_auth_core = { path = "crates/core" }
+better_auth_events = { path = "crates/events" }
+better_auth_events_sdk = { path = "crates/events-sdk" }
+better_auth_webhooks = { path = "crates/webhooks" }
+better_auth_webhooks_sdk = { path = "crates/webhooks-sdk" }
+```
+
+### Plugin Cargo.toml Template
+
+```toml
+[package]
+name = "better-auth-plugin-my-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Workspace dependencies
+better_auth_core = { workspace = true }
+better_auth_events_sdk = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+# Plugin-specific dependencies
+my_external_crate = "1.0"
+
+[dev-dependencies]
+better_auth_adapters_memory = { path = "../../adapters/memory" }
+tokio = { workspace = true, features = ["test-util"] }
+
+[features]
+default = []
+# Optional features for plugin
+feature_a = []
+feature_b = ["dep:optional_dep"]
+```
+
+## Module Size Guidelines
+
+### When to Split Modules
+
+Split a module when it exceeds:
+- **500 lines** for implementation files
+- **200 lines** for trait definitions
+- **100 lines** for type definitions
+
+### Splitting Strategy
+
+```
+# Before (1000 lines)
+handlers.rs
+
+# After
+handlers/
+├── mod.rs          # Re-exports
+├── signin.rs       # 200 lines
+├── signup.rs       # 200 lines
+├── session.rs      # 200 lines
+└── oauth.rs        # 200 lines
+```
+
+**handlers/mod.rs:**
+```rust
+mod signin;
+mod signup;
+mod session;
+mod oauth;
+
+pub use signin::*;
+pub use signup::*;
+pub use session::*;
+pub use oauth::*;
+```
+
+## Naming Conventions
+
+### Crate Names
+
+- Core: `better_auth_core`
+- Plugins: `better_auth_plugin_{name}`
+- Adapters: `better_auth_adapter_{name}`
+- Integrations: `better_auth_{framework}`
+- SDKs: `better_auth_{system}_sdk`
+
+### Module Names
+
+- snake_case for all modules
+- Descriptive, single-word when possible
+- Grouped by feature, not by type
+
+```rust
+// ✅ GOOD - Feature-based
+mod oauth;
+mod two_factor;
+mod session;
+
+// ❌ BAD - Type-based (leads to circular deps)
+mod handlers;  // All handlers together
+mod models;    // All models together
+```
+
+### File Names
+
+- `lib.rs` - Crate entry point
+- `mod.rs` - Module definition and re-exports only
+- Feature files: `oauth.rs`, `session.rs`, `validation.rs`
+
+## Circular Dependency Prevention
+
+### Rule 1: Never Import Sibling Plugins
+
+```rust
+// ❌ BAD - Plugin depending on plugin
+use better_auth_plugin_oauth::OAuthPlugin;
+
+// ✅ GOOD - Use events or extensions
+ctx.events().emit(Event::new("oauth.signin")).await?;
+```
+
+### Rule 2: Use Traits for Cross-Layer Communication
+
+```rust
+// ✅ GOOD - Core defines trait
+pub trait AuthPlugin: Send + Sync {
+    fn id(&self) -> &'static str;
+}
+
+// Plugins implement, core uses trait objects
+Box<dyn AuthPlugin>
+```
+
+### Rule 3: SDK Crates for Shared Interfaces
+
+```rust
+// Instead of plugins depending on events implementation,
+// they depend on events-sdk which defines traits only
+use better_auth_events_sdk::EventProvider;
+```
+
+## Testing Structure
+
+### Test Organization
+
+```
+crates/my-crate/
+├── src/
+│   └── lib.rs
+├── tests/                  # Integration tests
+│   ├── integration.rs
+│   └── fixtures/
+│       ├── mod.rs
+│       └── data.json
+└── benches/                # Benchmarks
+    └── performance.rs
+```
+
+### Test Patterns
+
+```rust
+// Unit tests in same file
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_unit() { }
+}
+
+// Integration tests in tests/
+// tests/integration.rs
+use better_auth_my_crate::*;
+
+#[tokio::test]
+async fn test_integration() { }
+```
+
+## Documentation Standards
+
+### Crate-Level Documentation
+
+Every `lib.rs` must have comprehensive module docs:
+
+```rust
+//! # Better Auth [Crate Name]
+//!
+//! One-line description of what this crate does.
+//!
+//! ## Purpose
+//!
+//! Detailed explanation of the crate's purpose and role in the system.
+//!
+//! ## Features
+//!
+//! - Feature 1
+//! - Feature 2
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! // Example code
+//! ```
+//!
+//! ## Architecture
+//!
+//! Explanation of how this crate fits into Better Auth architecture.
+```
+
+### API Documentation
+
+All public items require docs:
+
+```rust
+/// Creates a new authentication context.
+///
+/// # Arguments
+///
+/// * `adapter` - Storage adapter for persistence
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let ctx = AuthContext::new(adapter);
+/// ```
+pub fn new(adapter: impl StorageAdapter) -> Self { }
+```
+
+## Build and CI Structure
+
+### Build Scripts
+
+```
+scripts/
+├── build.sh            # Full build
+├── test.sh             # Run all tests
+├── lint.sh             # Linting
+├── check-deps.sh       # Dependency audit
+└── release.sh          # Release process
+```
+
+### CI Configuration
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        crate: [core, events, webhooks, plugins/oauth, ...]
+    steps:
+      - run: cargo test -p better-auth-${{ matrix.crate }}
+```
+
+## Performance Considerations
+
+### Compilation Time
+
+- Keep core dependencies minimal
+- Use feature flags for optional functionality
+- Separate SDK from implementation crates
+
+### Runtime Performance
+
+- Use `Arc` for shared config (not `Clone`)
+- Connection pooling in adapters
+- Lazy initialization for expensive resources
+
+## Summary Checklist
+
+- [ ] Core has no plugin dependencies
+- [ ] Plugins don't depend on each other
+- [ ] SDK crates separate interfaces from implementation
+- [ ] Each crate has clear, documented purpose
+- [ ] Modules under 500 lines
+- [ ] All public APIs documented
+- [ ] Tests organized appropriately
+- [ ] Workspace dependencies used consistently
+- [ ] No circular dependencies
