@@ -1,0 +1,34 @@
+[package]
+name = "better_auth_webhooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Webhook system for Better Auth - delivery, retry, and verification"
+
+[dependencies]
+better_auth_events = { path = "../../events/events" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# For HMAC signature
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# For HTTP delivery (using rustls to avoid OpenSSL dependency)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[features]
+default = ["http-client"]
+http-client = ["reqwest"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
